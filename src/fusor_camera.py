@@ -18,6 +18,7 @@ from is_msgs.camera_pb2 import FrameTransformations, FrameTransformation
 
 from is_msgs.common_pb2 import Pose
 import math
+from math import pi
 
 
 IS_BROKER_EVENTS_TOPIC = "BrokerEvents.Consumers"
@@ -26,13 +27,26 @@ RE_CAMERA_GATEWAY_CONSUMER = re.compile("CameraGateway\\.(\\d+)\\.GetConfig")
 log = Logger(name="SubscriptionManager")
 
 
+def rotationZ_matrix(angle_rad):
+  R_homogeneous = np.array([ 
+               [cos(angle_rad), -sin(angle_rad), 0, 0],
+               [sin(angle_rad),  cos(angle_rad), 0, 0],
+               [0             ,  0             , 1, 0],
+               [0             ,  0             , 0, 1]
+            ])
+  return R_homogeneous
+
+
+
 def camera_parameters(file):
     camera_data = json.load(open(file))
     K = np.array(camera_data['intrinsic']['doubles']).reshape(3, 3)
     res = [camera_data['resolution']['width'],
            camera_data['resolution']['height']]
     tf = np.array(camera_data['extrinsic']['tf']['doubles']).reshape(4, 4)
+    #Rz = rotationZ_matrix(pi/2)[:3, :3]
     R = tf[:3, :3]
+    #R = R@Rz
     T = tf[:3, 3].reshape(3, 1)
     dis = np.array(camera_data['distortion']['doubles'])
     return K, R, T, res, dis
@@ -49,8 +63,8 @@ def sort_corners (ids,corners):
     return sorted_corners, centers
 
 class SubscriptionManager:
-    def __init__(self):
-        self.channel = Channel("amqp://10.10.3.188:30000")
+    def __init__(self, ip):
+        self.channel = Channel(f"amqp://{ip}:30000")
         self.subscription = Subscription(self.channel)
         self.subscription.subscribe("BrokerEvents.Consumers")
         self.cameras = []
@@ -73,16 +87,16 @@ class SubscriptionManager:
         return self.cameras
 
 class SubscriptionAruco:
-    def __init__(self, camera_id):
+    def __init__(self, camera_id, ip):
         self.camera_id = camera_id
-        self.channel = Channel("amqp://10.10.3.188:30000")
+        self.channel = Channel(f"amqp://{ip}:30000")
         self.subscription = Subscription(self.channel)
         self.subscription.subscribe(f"ArUco.{camera_id}.Detection")
 
 if __name__ == "__main__":
-
+    ip = "10.10.3.188"		
     
-    channel_publish = Channel("amqp://10.10.3.188:30000")
+    channel_publish = Channel(f"amqp://{ip}:30000")
 
     #Load cameras parameters
     K1, R1, T1, res1, dis1 = camera_parameters('images/hd/camera1.json')
@@ -91,11 +105,12 @@ if __name__ == "__main__":
     K4, R4, T4, res4, dis4 = camera_parameters('images/hd/camera4.json')
 
     aurco_id = 5
-    subscription_manager = SubscriptionManager()
+    subscription_manager = SubscriptionManager(ip = ip)
     camera_ids = subscription_manager.run()
+    #camera_ids = [2]
     arucoDetector_subscriptions = []
     for camera_id in camera_ids:
-        arucoDetector_subscriptions.append(SubscriptionAruco(camera_id))
+        arucoDetector_subscriptions.append(SubscriptionAruco(camera_id = camera_id, ip = ip))
 
     while True:
 
@@ -110,7 +125,7 @@ if __name__ == "__main__":
         for arucoDetector_subscription in arucoDetector_subscriptions:
             reply = None
             try:
-                reply = arucoDetector_subscription.channel.consume(timeout = 0.01)
+                reply = arucoDetector_subscription.channel.consume(timeout = 0.1)
             except socket.timeout:
                 pass
             
@@ -130,6 +145,8 @@ if __name__ == "__main__":
                             if arucoDetector_subscription.camera_id == 1:
                                 centersAruco[0][0] = centers[0][0]
                                 centersAruco[0][1] = centers[0][1]
+
+
 
                                 cornerAruco_1[0][0] = corners[0][0][0][0]
                                 cornerAruco_1[0][1] = corners[0][0][0][1]
@@ -226,38 +243,39 @@ if __name__ == "__main__":
 
                 # pseudo inverse of M
                 M_inv = np.linalg.pinv(M)
-                # Multiplication by RinvT
+                # Multiplication by RinvTs
                 xyz = np.dot(M_inv,RinvT)
                 arucoPoints_World.append(xyz)
 
             elif (detections == 1): 
-                print('just one detection for marker ',i)
+                #print('just one detection for marker ',i)
                 M = np.zeros((3,3))
                 RinvT = np.zeros((3,1))
+                d = 0.3
                 # if camera 1 detected the aruco marker i
                 if detected_markers[i-1][0] == 1:
                     M[0:2,0:2] = -identity(2)
                     m = np.array([centers[i-1][0],centers[i-1][1],1])
                     M[0:3,2] = np.dot(KRinv_1,m)
-                    RinvT[0:3,0] = RinvT_1[0:3,0]
+                    RinvT[0:3,0] = RinvT_1[0:3,0] + np.array([0,0,d])
                 # if camera 2 detected the aruco marker i
                 if detected_markers[i-1][1] == 1:
                     M[0:2,0:2] = -identity(2)
                     m = np.array([centers[i-1][2],centers[i-1][3],1])
                     M[0:3,2] = np.dot(KRinv_2,m)
-                    RinvT[0:3,0] = RinvT_2[0:3,0]
+                    RinvT[0:3,0] = RinvT_2[0:3,0] + np.array([0,0,d])
                 # if camera 3 detected the aruco marker i
                 if detected_markers[i-1][2] == 1:
                     M[0:2,0:2] = -identity(2)
                     m = np.array([centers[i-1][4],centers[i-1][5],1])
                     M[0:3,2] = np.dot(KRinv_3,m)
-                    RinvT[0:3,0] = RinvT_3[0:3,0]
+                    RinvT[0:3,0] = RinvT_3[0:3,0] + np.array([0,0,d])
                 # if camera 4 detected the aruco marker i
                 if detected_markers[i-1][3] == 1:
                     M[0:2,0:2] = -identity(2)
                     m = np.array([centers[i-1][6],centers[i-1][7],1])
                     M[0:3,2] = np.dot(KRinv_4,m)
-                    RinvT[0:3,0] = RinvT_4[0:3,0]
+                    RinvT[0:3,0] = RinvT_4[0:3,0] + np.array([0,0,d])
                 # inverse of M
                 M_inv = np.linalg.inv(M)
                 # Multiplication by RinvT
@@ -274,10 +292,9 @@ if __name__ == "__main__":
             x_p2p1 = arucoPoints_World[2][0][0] - arucoPoints_World[1][0][0]
             y_p2p1 = arucoPoints_World[2][1][0] - arucoPoints_World[1][1][0]
             roll_rad = np.arctan2(y_p2p1, x_p2p1)
-            roll_deg = (180*roll_rad)/pi
-            print(x, y, roll_deg)
-
-            f = FrameTransformation()
+            roll_deg = (180*roll_rad)/pi  
+            print(f"x = {x:.3f}, y = {y:.3f}, theta = {roll_deg:.3f}, detect by = {detections}, cam = {detected_markers}")
+            f = FrameTransformation()          
             f.tf.doubles.append(x)
             f.tf.doubles.append(y)
             f.tf.doubles.append(z)
@@ -294,15 +311,14 @@ if __name__ == "__main__":
             y_p2p1 = arucoPoints_World[2][1][0] - arucoPoints_World[1][1][0]
             roll_rad = np.arctan2(y_p2p1, x_p2p1)
             roll_deg = (180*roll_rad)/pi
-            print(x, y, roll_deg)
+            print(f"x = {x:.3f}, y = {y:.3f}, theta = {roll_deg:.3f}, detect by = {detections}, cam = {detected_markers}")
 
 
             f = FrameTransformation()
             f.tf.doubles.append(x)
             f.tf.doubles.append(y)
-            f.tf.doubles.append(0)
             f.tf.doubles.append(roll_rad)
 
             message = Message(content=f)
-            channel_publish.publish(message, topic=f"localization.{aurco_id}.aruco")
+            #channel_publish.publish(message, topic=f"localization.{aurco_id}.aruco")
 

@@ -13,6 +13,7 @@ import matplotlib
 matplotlib.use('Qt5Agg')
 import matplotlib.pyplot as plt
 from math import pi
+import socket
 
 class MapClient():
     def __init__(self,mapped_area_config):
@@ -103,14 +104,17 @@ if __name__ == '__main__':
     config = json.load(open('config.json', 'r'))
     area_map = MapClient(config['mapped_area'])
     while True:
-        message = channel.consume()
-        f = message.unpack(FrameTransformation)
+        try:
+            message = channel.consume(timeout = 0.0)
+            f = message.unpack(FrameTransformation)
 
-        tf = f.tf.doubles
+            tf = f.tf.doubles
 
-        x = tf[0]
-        y = tf[1]
-        roll_rad = tf[3]
-        area_map.update_position('aruco',[x ,y],color='b')
+            x = tf[0]
+            y = tf[1]
+            roll_rad = tf[3]
+            area_map.update_position('aruco',[x ,y],color='b')
 
-        print(x, y, (roll_rad*180)/pi)
+            print(x, y, (roll_rad*180)/pi)
+        except socket.timeout:
+            pass
